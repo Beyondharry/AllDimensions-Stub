@@ -27,6 +27,6 @@ jobs:
           WIKI_API: ${{ secrets.WIKI_API }}
           BOT_USER: ${{ secrets.BOT_USER }}
           BOT_PASS: ${{ secrets.BOT_PASS }}
-          EXEMPT_CATEGORIES: ${{ secrets.EXEMPT_CATEGORIES }}
           EXEMPT_TITLE_REGEX: ${{ secrets.EXEMPT_TITLE_REGEX }}
+          EXEMPT_CATEGORIES: ${{ vars.EXEMPT_CATEGORIES }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || '0' }}
