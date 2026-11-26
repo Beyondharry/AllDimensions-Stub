@@ -10,11 +10,11 @@ const intEnv = (name, def) => {
 };
 
 // Max live edits per run. Unset/empty -> 10. Set to 0 for no limit.
-const MAX_EDITS = intEnv('MAX_EDITS', 300);
+const MAX_EDITS = intEnv('MAX_EDITS', 0);
 
 // Speed tuning (all optional)
-const EDIT_INTERVAL_MS = Math.max(250, intEnv('EDIT_INTERVAL_MS', 2000)); // base gap between edits
-const MAX_EDIT_INTERVAL_MS = 30000;                                      // adaptive slowdown ceiling
+const EDIT_INTERVAL_MS = Math.max(250, intEnv('EDIT_INTERVAL_MS', 2500)); // base gap between edits
+const MAX_EDIT_INTERVAL_MS = 15000;                                      // adaptive slowdown ceiling
 const EDIT_CONCURRENCY = Math.max(1, intEnv('EDIT_CONCURRENCY', 1));
 const READ_CONCURRENCY = Math.max(1, intEnv('READ_CONCURRENCY', 3));
 const BATCH_SIZE = 50;   // pages per read request
@@ -160,8 +160,8 @@ async function api(params, isPost = false) {
       if (rateLimited) penalizeEdits();
 
       const backoff = rateLimited
-        ? Math.min(120000, Math.max(retryAfterMs, 5000 * 2 ** attempt))
-        : Math.min(30000, Math.max(retryAfterMs, 1000 * 2 ** attempt));
+        ? Math.min(15000, Math.max(retryAfterMs, 3000 * 2 ** attempt))
+        : Math.min(15000, Math.max(retryAfterMs, 1000 * 2 ** attempt));
       await sleep(backoff);
     }
   }
@@ -483,8 +483,8 @@ async function main() {
 
   // Stage 8: one cleanup pass for anything that was rate limited, after a cooldown.
   if (retryJobs.length > 0) {
-    console.log(`Cooling down 30s, then retrying ${retryJobs.length} rate-limited edit(s)...`);
-    await sleep(30000);
+    console.log(`Cooling down 15s, then retrying ${retryJobs.length} rate-limited edit(s)...`);
+    await sleep(15000);
     editInterval = Math.max(editInterval, EDIT_INTERVAL_MS * 2);
     await mapPool(retryJobs, 1, (job) => runJob(job, true));
   }
