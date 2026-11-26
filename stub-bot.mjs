@@ -1,4 +1,4 @@
-// stub-bot.mjs — Dynamic Fandom Stub / Super Stub Manager (fast)
+// stub-bot.mjs — Dynamic Fandom Stub / Super Stub Manager (fast, capped, rate-limit safe)
 const WIKI_API = process.env.WIKI_API;       // e.g. "https://yourwiki.fandom.com/api.php"
 const BOT_USER = process.env.BOT_USER;       // e.g. "StubManager@StubBot"
 const BOT_PASS = process.env.BOT_PASS;       // Generated from Special:BotPasswords
@@ -9,12 +9,16 @@ const intEnv = (name, def) => {
   return Number.isFinite(n) && n >= 0 ? n : def;
 };
 
+// Max live edits per run. Unset/empty -> 10. Set to 0 for no limit.
+const MAX_EDITS = intEnv('MAX_EDITS', 300);
+
 // Speed tuning (all optional)
-const EDIT_INTERVAL_MS = intEnv('EDIT_INTERVAL_MS', 600); // min gap between edit starts
-const EDIT_CONCURRENCY = Math.max(1, intEnv('EDIT_CONCURRENCY', 3));
+const EDIT_INTERVAL_MS = Math.max(250, intEnv('EDIT_INTERVAL_MS', 2000)); // base gap between edits
+const MAX_EDIT_INTERVAL_MS = 30000;                                      // adaptive slowdown ceiling
+const EDIT_CONCURRENCY = Math.max(1, intEnv('EDIT_CONCURRENCY', 1));
 const READ_CONCURRENCY = Math.max(1, intEnv('READ_CONCURRENCY', 4));
-const BATCH_SIZE = 50;   // pages per read request (50 works for everyone)
-const MAX_RETRIES = 5;
+const BATCH_SIZE = 50;   // pages per read request
+const MAX_RETRIES = 8;
 
 // Pages in these categories are never given (or stripped of) stub templates.
 const EXEMPT_CATEGORIES = (
@@ -71,11 +75,39 @@ class ApiError extends Error {
   constructor(code, info) {
     super(`API Error (${code}): ${info}`);
     this.code = code;
+    this.info = info;
   }
 }
 
-const RETRYABLE_CODES = new Set(['maxlag', 'ratelimited']);
+// Marks an error as retryable; rateLimited=true triggers the longer backoff.
+class RetryableError extends Error {
+  constructor(message, rateLimited = false) {
+    super(message);
+    this.rateLimited = rateLimited;
+  }
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const isRateLimitError = (code, info) =>
+  code === 'ratelimited' || /rate.?limit|too many|throttl/i.test(`${code} ${info || ''}`);
+
+// Adaptive edit pacing: slows down on every rate-limit hit, eases back on success.
+let editInterval = EDIT_INTERVAL_MS;
+let rateLimitHits = 0;
+
+function penalizeEdits() {
+  rateLimitHits++;
+  const old = editInterval;
+  editInterval = Math.min(MAX_EDIT_INTERVAL_MS, editInterval * 2);
+  if (editInterval !== old) {
+    console.log(`Rate limited: edit gap raised to ${editInterval} ms.`);
+  }
+}
+
+function rewardEdits() {
+  editInterval = Math.max(EDIT_INTERVAL_MS, Math.floor(editInterval * 0.9));
+}
 
 async function api(params, isPost = false) {
   const bodyParams = new URLSearchParams({
@@ -92,7 +124,7 @@ async function api(params, isPost = false) {
       const res = await fetch(url, {
         method: isPost ? 'POST' : 'GET',
         headers: {
-          'User-Agent': 'FandomStubBot/1.4 (Periodic Maintenance Script)',
+          'User-Agent': 'FandomStubBot/1.6 (Periodic Maintenance Script)',
           ...(cookies.size ? { Cookie: cookieHeader() } : {}),
           ...(isPost ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
         },
@@ -103,21 +135,34 @@ async function api(params, isPost = false) {
       const ra = parseInt(res.headers.get('retry-after') || '', 10);
       if (ra > 0) retryAfterMs = ra * 1000;
 
-      if (res.status === 429 || res.status >= 500) {
-        throw new Error(`HTTP ${res.status}`);
-      }
+      if (res.status === 429) throw new RetryableError('HTTP 429', true);
+      if (res.status >= 500) throw new RetryableError(`HTTP ${res.status}`);
 
       const data = await res.json();
       if (data.error) {
-        if (RETRYABLE_CODES.has(data.error.code)) {
-          throw new Error(`Retryable API error: ${data.error.code}`);
-        }
-        throw new ApiError(data.error.code, data.error.info);
+        const { code, info } = data.error;
+        if (isRateLimitError(code, info)) throw new RetryableError(`Rate limited (${code})`, true);
+        if (code === 'maxlag') throw new RetryableError('maxlag');
+        throw new ApiError(code, info);
       }
       return data;
     } catch (err) {
-      if (err instanceof ApiError || attempt >= MAX_RETRIES) throw err;
-      await sleep(retryAfterMs || Math.min(30000, 1000 * 2 ** attempt));
+      const retryable = err instanceof RetryableError || !(err instanceof ApiError);
+      if (!retryable || attempt >= MAX_RETRIES) {
+        // Surface exhausted rate-limit retries as an ApiError so callers can detect them.
+        if (err instanceof RetryableError && err.rateLimited) {
+          throw new ApiError('ratelimited', err.message);
+        }
+        throw err;
+      }
+
+      const rateLimited = err instanceof RetryableError && err.rateLimited;
+      if (rateLimited) penalizeEdits();
+
+      const backoff = rateLimited
+        ? Math.min(120000, Math.max(retryAfterMs, 5000 * 2 ** attempt))
+        : Math.min(30000, Math.max(retryAfterMs, 1000 * 2 ** attempt));
+      await sleep(backoff);
     }
   }
 }
@@ -145,13 +190,13 @@ async function mapPool(items, limit, fn) {
   return results;
 }
 
-// Spaces out edit starts so concurrency never exceeds the configured rate.
+// Spaces out edit starts using the current (adaptive) interval.
 let nextEditSlot = 0;
 async function throttleEdit() {
   const now = Date.now();
-  const wait = Math.max(0, nextEditSlot - now);
-  nextEditSlot = Math.max(now, nextEditSlot) + EDIT_INTERVAL_MS;
-  if (wait > 0) await sleep(wait);
+  const start = Math.max(now, nextEditSlot);
+  nextEditSlot = start + editInterval;
+  if (start > now) await sleep(start - now);
 }
 
 // ---------- login ----------
@@ -336,6 +381,7 @@ async function editPage(page, revid, text, summary, token) {
     true
   );
 
+  rewardEdits();
   console.log(`Edited "${page.title}" (${res.edit?.result || 'OK'}) - ${summary}`);
 }
 
@@ -343,6 +389,8 @@ async function editPage(page, revid, text, summary, token) {
 
 async function main() {
   const t0 = Date.now();
+  const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+
   await login();
   const csrfToken = DRY_RUN ? null : await getCsrfToken();
 
@@ -383,7 +431,7 @@ async function main() {
       `(${exemptCount} otherwise-eligible pages skipped as exempt).`
   );
   if (candidates.length === 0) {
-    console.log(`Done in ${((Date.now() - t0) / 1000).toFixed(1)}s.`);
+    console.log(`Done in ${elapsed()}.`);
     return;
   }
 
@@ -399,26 +447,52 @@ async function main() {
     if (plan) jobs.push({ page, revid: entry.revid, ...plan });
   }
 
-  // Stage 6: apply edits in parallel, rate-limited.
+  // Stage 6: apply the cap. Dry runs always show everything.
+  const capped = !DRY_RUN && MAX_EDITS > 0 && jobs.length > MAX_EDITS;
+  const toRun = capped ? jobs.slice(0, MAX_EDITS) : jobs;
+  if (capped) {
+    console.log(
+      `MAX_EDITS=${MAX_EDITS}: editing ${toRun.length} of ${jobs.length} pages this run; ` +
+        `${jobs.length - toRun.length} deferred to later runs.`
+    );
+  }
+
+  // Stage 7: apply edits, rate-limited. Rate-limit failures are collected for a retry pass.
   let edited = 0;
   let failed = 0;
-  await mapPool(jobs, EDIT_CONCURRENCY, async (job) => {
+  const retryJobs = [];
+
+  const runJob = async (job, isRetry) => {
     try {
       await editPage(job.page, job.revid, job.newText, job.summary, csrfToken);
       edited++;
     } catch (err) {
       if (err.code === 'editconflict') {
         console.log(`Skipped "${job.page.title}" (edited by someone else mid-run).`);
+      } else if (!isRetry && isRateLimitError(err.code, err.info)) {
+        console.log(`Rate limited on "${job.page.title}"; will retry at the end.`);
+        retryJobs.push(job);
       } else {
         failed++;
         console.error(`Failed "${job.page.title}": ${err.message}`);
       }
     }
-  });
+  };
+
+  await mapPool(toRun, EDIT_CONCURRENCY, (job) => runJob(job, false));
+
+  // Stage 8: one cleanup pass for anything that was rate limited, after a cooldown.
+  if (retryJobs.length > 0) {
+    console.log(`Cooling down 30s, then retrying ${retryJobs.length} rate-limited edit(s)...`);
+    await sleep(30000);
+    editInterval = Math.max(editInterval, EDIT_INTERVAL_MS * 2);
+    await mapPool(retryJobs, 1, (job) => runJob(job, true));
+  }
 
   console.log(
-    `Done in ${((Date.now() - t0) / 1000).toFixed(1)}s. ` +
-      `${DRY_RUN ? `${jobs.length} would be edited` : `${edited} edited`}, ${failed} failed.`
+    `Done in ${elapsed()}. ` +
+      `${DRY_RUN ? `${jobs.length} would be edited` : `${edited} edited`}, ${failed} failed, ` +
+      `${rateLimitHits} rate-limit hit(s).`
   );
   if (failed > 0) process.exitCode = 1;
 }
