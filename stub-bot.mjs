@@ -16,7 +16,7 @@ const MAX_EDITS = intEnv('MAX_EDITS', 300);
 const EDIT_INTERVAL_MS = Math.max(250, intEnv('EDIT_INTERVAL_MS', 2000)); // base gap between edits
 const MAX_EDIT_INTERVAL_MS = 30000;                                      // adaptive slowdown ceiling
 const EDIT_CONCURRENCY = Math.max(1, intEnv('EDIT_CONCURRENCY', 1));
-const READ_CONCURRENCY = Math.max(1, intEnv('READ_CONCURRENCY', 4));
+const READ_CONCURRENCY = Math.max(1, intEnv('READ_CONCURRENCY', 3));
 const BATCH_SIZE = 50;   // pages per read request
 const MAX_RETRIES = 8;
 
@@ -99,7 +99,7 @@ let rateLimitHits = 0;
 function penalizeEdits() {
   rateLimitHits++;
   const old = editInterval;
-  editInterval = Math.min(MAX_EDIT_INTERVAL_MS, editInterval * 2);
+  editInterval = Math.min(MAX_EDIT_INTERVAL_MS, editInterval * 1.5);
   if (editInterval !== old) {
     console.log(`Rate limited: edit gap raised to ${editInterval} ms.`);
   }
@@ -330,7 +330,7 @@ function planEdit(page, content) {
 
     let newText = content.replace(STRIP_STUB, '');
     if (!RE_SUPER.test(newText)) {
-      newText = `{{Super Stub}}\n${newText.replace(/^\s+/, '')}`;
+      newText = `{{Super Stub}}\n\n\n${newText.replace(/^\s+/, '')}`;
     }
     if (newText === content) return null;
 
@@ -347,7 +347,7 @@ function planEdit(page, content) {
 
   let newText = content.replace(STRIP_SUPER, '');
   if (!RE_STUB.test(newText)) {
-    newText = `{{Stub}}\n${newText.replace(/^\s+/, '')}`;
+    newText = `{{Stub}}\n\n\n${newText.replace(/^\s+/, '')}`;
   }
   if (newText === content) return null;
 
