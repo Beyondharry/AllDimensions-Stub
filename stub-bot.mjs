@@ -13,7 +13,7 @@ const intEnv = (name, def) => {
 const MAX_EDITS = intEnv('MAX_EDITS', 0);
 
 // Speed tuning (all optional)
-const EDIT_INTERVAL_MS = Math.max(250, intEnv('EDIT_INTERVAL_MS', 2500)); // base gap between edits
+const EDIT_INTERVAL_MS = Math.max(250, intEnv('EDIT_INTERVAL_MS', 1100)); // base gap between edits
 const MAX_EDIT_INTERVAL_MS = 15000;                                      // adaptive slowdown ceiling
 const EDIT_CONCURRENCY = Math.max(1, intEnv('EDIT_CONCURRENCY', 1));
 const READ_CONCURRENCY = Math.max(1, intEnv('READ_CONCURRENCY', 3));
