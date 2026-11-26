@@ -1,0 +1,32 @@
+name: Stub Bot
+
+on:
+  schedule:
+    - cron: '17 */4 * * *'   # every 4 hours at :17 UTC (00:17, 04:17, 08:17, ...)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (1 = no edits)'
+        default: '1'
+
+concurrency:
+  group: stub-bot
+  cancel-in-progress: false   # never run two copies at once
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node stub-bot.mjs
+        env:
+          WIKI_API: ${{ secrets.WIKI_API }}
+          BOT_USER: ${{ secrets.BOT_USER }}
+          BOT_PASS: ${{ secrets.BOT_PASS }}
+          EXEMPT_CATEGORIES: ${{ secrets.EXEMPT_CATEGORIES }}
+          EXEMPT_TITLE_REGEX: ${{ secrets.EXEMPT_TITLE_REGEX }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || '0' }}
