@@ -10,7 +10,7 @@ on:
         default: '1'
 
 concurrency:
-  group: stub-bot
+  group: stubmanager
   cancel-in-progress: false   # never run two copies at once
 
 jobs:
