@@ -22,7 +22,7 @@ const READ_CONCURRENCY = Math.max(1, intEnv('READ_CONCURRENCY', 3));
 const BATCH_SIZE = 50;   // pages per read request
 const MAX_RETRIES = 8;
 const STOP_CHECK_EVERY = 10; // re-read the wiki config every N edits to honour a soft stop
-const TEMPLATE_MARGIN = 64;  // max bytes a stub banner can add to a page (used by the cheap pre-filter)
+const TEMPLATE_MARGIN = 20;  // max bytes a stub banner can add to a page (used by the cheap pre-filter)
 
 // ---------- wiki configuration ----------
 
