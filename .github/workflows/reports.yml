@@ -1,0 +1,35 @@
+name: Wiki reports
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'          # weekly, Sunday 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (save reports as a download, do not edit the wiki)'
+        type: boolean
+        default: true
+
+concurrency:
+  group: stubmanager
+  cancel-in-progress: false
+
+jobs:
+  reports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node reports-bot.mjs
+        env:
+          WIKI_API: ${{ secrets.WIKI_API }}
+          BOT_USER: ${{ secrets.REPORTS_BOT_USER }}
+          BOT_PASS: ${{ secrets.REPORTS_BOT_PASS }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && hashFiles('out/**') != '' }}
+        with:
+          name: reports-dry-run
+          path: out/
