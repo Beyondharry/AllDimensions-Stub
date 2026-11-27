@@ -1,4 +1,9 @@
-// stub-bot.mjs — Dynamic Fandom Stub / Super Stub Manager (fast, capped, rate-limit safe)
+// stub-bot.mjs — Dynamic Fandom Stub / Super Stub Manager
+// (fast, capped, rate-limit safe, configurable from the wiki)
+//
+// Setting priority:  Wiki (User:StubManager/Configurations)  >  Secrets (env)  >  Inline code (DEFAULTS)
+//
+// Required secrets (never read from the wiki):
 const WIKI_API = process.env.WIKI_API;       // e.g. "https://yourwiki.fandom.com/api.php"
 const BOT_USER = process.env.BOT_USER;       // e.g. "StubManager@StubBot"
 const BOT_PASS = process.env.BOT_PASS;       // Generated from Special:BotPasswords
@@ -9,38 +14,24 @@ const intEnv = (name, def) => {
   return Number.isFinite(n) && n >= 0 ? n : def;
 };
 
-// Max live edits per run. Unset/empty -> 10. Set to 0 for no limit.
+// Max live edits per run. Unset/empty -> no limit. Set a number to cap.
 const MAX_EDITS = intEnv('MAX_EDITS', 0);
 
-// Speed tuning (all optional)
+// Speed tuning (all optional, env-only)
 const EDIT_INTERVAL_MS = Math.max(250, intEnv('EDIT_INTERVAL_MS', 1100)); // base gap between edits
 const MAX_EDIT_INTERVAL_MS = 15000;                                      // adaptive slowdown ceiling
 const EDIT_CONCURRENCY = Math.max(1, intEnv('EDIT_CONCURRENCY', 1));
 const READ_CONCURRENCY = Math.max(1, intEnv('READ_CONCURRENCY', 3));
 const BATCH_SIZE = 50;   // pages per read request
 const MAX_RETRIES = 8;
+const STOP_CHECK_EVERY = 10; // re-read the wiki config every N edits to honour a soft stop
 
-// Pages in these categories are never given (or stripped of) stub templates.
-const EXEMPT_CATEGORIES = (
-  process.env.EXEMPT_CATEGORIES || 'Googology,Salad numbers,Stub exempt'
-)
-  .split(',')
-  .map((c) => normalizeCategory(c))
-  .filter(Boolean);
+// ---------- wiki configuration ----------
 
-// Optional: pages whose title matches this regex are also exempt.
-const EXEMPT_TITLE_REGEX = process.env.EXEMPT_TITLE_REGEX
-  ? new RegExp(process.env.EXEMPT_TITLE_REGEX, 'i')
-  : null;
-
-const SUPER_STUB_MAX = 1024; // 512 <= size < 1024  -> {{Super Stub}}
-const STUB_MAX = 2048;       // 1024 <= size < 2048 -> {{Stub}}
-const MIN_SIZE = 512;        // < 512 -> left alone (see Special:ShortPages)
-
-if (!WIKI_API || !BOT_USER || !BOT_PASS) {
-  console.error('Missing WIKI_API, BOT_USER, or BOT_PASS environment variables.');
-  process.exit(1);
-}
+const CONFIG_PAGE = 'User:StubManager/Configurations';
+const OWNER = 'PUREDARK999';                  // always trusted
+const TRUSTED_GROUPS = ['sysop', 'bureaucrat']; // trusted by group
+const BOT_NAME = (BOT_USER || '').split('@')[0]; // the bot's own account is trusted too
 
 function normalizeCategory(name) {
   return name
@@ -48,6 +39,57 @@ function normalizeCategory(name) {
     .replace(/_/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+const normalizeTitle = (t) => t.replace(/_/g, ' ').trim().toLowerCase();
+const parseSize = (v) => (/^\d+$/.test(v) ? parseInt(v, 10) : undefined);
+
+// Lowest priority: inline defaults.
+const DEFAULTS = {
+  enabled: true,
+  exempt_categories: ['googology', 'salad numbers', 'stub exempt'],
+  exempt_titles: [],
+  exempt_title_regex: '',
+  min_size: 512,        // < min_size                       -> left alone (see Special:ShortPages)
+  super_stub_max: 1024, // min_size <= size < super_stub_max -> {{Super Stub}}
+  stub_max: 2048,       // super_stub_max <= size < stub_max -> {{Stub}}
+};
+
+// Middle priority: secrets / environment variables (empty = not set).
+const SECRETS = {
+  enabled: process.env.ENABLED,
+  exempt_categories: process.env.EXEMPT_CATEGORIES,
+  exempt_titles: process.env.EXEMPT_TITLES,
+  exempt_title_regex: process.env.EXEMPT_TITLE_REGEX,
+  min_size: process.env.MIN_SIZE,
+  super_stub_max: process.env.SUPER_STUB_MAX,
+  stub_max: process.env.STUB_MAX,
+};
+
+// Each parser returns undefined for invalid input (the value is then ignored).
+const PARSERS = {
+  enabled: (v) =>
+    /^(1|true|yes|on)$/i.test(v) ? true : /^(0|false|no|off)$/i.test(v) ? false : undefined,
+  exempt_categories: (v) => v.split(',').map((c) => normalizeCategory(c)).filter(Boolean),
+  exempt_titles: (v) => v.split(',').map((t) => normalizeTitle(t)).filter(Boolean),
+  exempt_title_regex: (v) => {
+    try {
+      new RegExp(v, 'i');
+      return v;
+    } catch {
+      return undefined;
+    }
+  },
+  min_size: parseSize,
+  super_stub_max: parseSize,
+  stub_max: parseSize,
+};
+
+let cfg = null; // resolved in main()
+
+if (!WIKI_API || !BOT_USER || !BOT_PASS) {
+  console.error('Missing WIKI_API, BOT_USER, or BOT_PASS environment variables.');
+  process.exit(1);
 }
 
 // ---------- HTTP / API ----------
@@ -124,7 +166,7 @@ async function api(params, isPost = false) {
       const res = await fetch(url, {
         method: isPost ? 'POST' : 'GET',
         headers: {
-          'User-Agent': 'FandomStubBot/1.6 (Periodic Maintenance Script)',
+          'User-Agent': 'FandomStubBot/1.7 (Periodic Maintenance Script)',
           ...(cookies.size ? { Cookie: cookieHeader() } : {}),
           ...(isPost ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
         },
@@ -226,6 +268,151 @@ async function getCsrfToken() {
   return res.query.tokens.csrftoken;
 }
 
+// ---------- wiki config loading ----------
+
+// Reads `key = value` lines from the first <pre> block. Lines starting with # are comments.
+function parseConfigText(text) {
+  const out = {};
+  const m = text.match(/<pre>([\s\S]*?)<\/pre>/i);
+  if (!m) return out;
+  for (const line of m[1].split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const i = t.indexOf('=');
+    if (i < 1) continue;
+    const key = t.slice(0, i).trim().toLowerCase();
+    if (Object.hasOwn(DEFAULTS, key)) out[key] = t.slice(i + 1).trim();
+  }
+  return out;
+}
+
+// Returns { values, revert }.
+// `values` come ONLY from the newest revision written by a trusted user
+// (sysop, bureaucrat, OWNER, or the bot itself). Untrusted edits are never used.
+// `revert` is set when the latest revision is untrusted and should be rolled back.
+async function loadWikiConfig() {
+  const res = await api({
+    action: 'query',
+    prop: 'revisions',
+    titles: CONFIG_PAGE,
+    rvprop: 'ids|user|content',
+    rvslots: 'main',
+    rvlimit: '50',
+  });
+  const page = res.query?.pages?.[0];
+  const revs = page?.revisions || [];
+  if (!page || page.missing || !revs.length) {
+    console.warn(`Config page "${CONFIG_PAGE}" not found; using secrets/defaults.`);
+    return { values: {}, revert: null };
+  }
+
+  const names = [...new Set(revs.filter((r) => !r.userhidden && r.user).map((r) => r.user))];
+  const ures = await api({
+    action: 'query',
+    list: 'users',
+    ususers: names.join('|'),
+    usprop: 'groups',
+  });
+
+  const trusted = new Set();
+  for (const u of ures.query?.users || []) {
+    if (u.missing || u.invalid || !u.name) continue; // IP editors and unknown users land here
+    const n = normalizeTitle(u.name);
+    if (
+      n === normalizeTitle(OWNER) ||
+      n === normalizeTitle(BOT_NAME) ||
+      (u.groups || []).some((g) => TRUSTED_GROUPS.includes(g))
+    ) {
+      trusted.add(u.name);
+    }
+  }
+
+  const isTrusted = (r) =>
+    !r.userhidden && trusted.has(r.user) && r.slots?.main?.content !== undefined;
+
+  const good = revs.find(isTrusted);
+  if (!good) {
+    console.warn('No trusted revision of the config page found; ignoring it.');
+    return { values: {}, revert: null };
+  }
+
+  const revert = isTrusted(revs[0])
+    ? null
+    : {
+        text: good.slots.main.content,
+        baseRevid: revs[0].revid,
+        goodRevid: good.revid,
+        goodUser: good.user,
+        badUser: revs[0].user || '(hidden)',
+      };
+
+  return { values: parseConfigText(good.slots.main.content), revert };
+}
+
+// Restores the last trusted revision's text over an untrusted edit.
+async function revertConfigPage(r, token) {
+  if (DRY_RUN) {
+    console.log(`[DRY RUN] Would revert config page edit by ${r.badUser}.`);
+    return;
+  }
+  try {
+    await api(
+      {
+        action: 'edit',
+        title: CONFIG_PAGE,
+        text: r.text,
+        baserevid: String(r.baseRevid), // fail instead of clobbering a newer edit
+        summary:
+          `Bot: Reverting edit by ${r.badUser} (only sysops, bureaucrats and ${OWNER} may edit this page); ` +
+          `restoring revision ${r.goodRevid} by ${r.goodUser}`,
+        nocreate: '1',
+        // Deliberately no bot flag, so admins can see the revert in Recent Changes.
+        token,
+      },
+      true
+    );
+    console.log(`Reverted config page edit by ${r.badUser}.`);
+  } catch (err) {
+    console.error(`Could not revert config page: ${err.message}`);
+  }
+}
+
+// Merge layers: Wiki > Secrets > Defaults. Empty values count as "not set".
+function resolveConfig(wikiValues, { quiet = false } = {}) {
+  const out = {};
+  for (const key of Object.keys(DEFAULTS)) {
+    let val;
+    for (const [src, raw] of [
+      ['wiki', wikiValues[key]],
+      ['secret', SECRETS[key]],
+    ]) {
+      if (raw === undefined || String(raw).trim() === '') continue;
+      const parsed = PARSERS[key](String(raw).trim());
+      if (parsed !== undefined) {
+        val = parsed;
+        break;
+      }
+      if (!quiet) console.warn(`Ignoring invalid ${src} value for ${key}: "${raw}"`);
+    }
+    out[key] = val !== undefined ? val : DEFAULTS[key];
+  }
+
+  if (!(out.min_size < out.super_stub_max && out.super_stub_max < out.stub_max)) {
+    if (!quiet) {
+      console.warn(
+        'Size thresholds must satisfy min_size < super_stub_max < stub_max; using defaults for all three.'
+      );
+    }
+    out.min_size = DEFAULTS.min_size;
+    out.super_stub_max = DEFAULTS.super_stub_max;
+    out.stub_max = DEFAULTS.stub_max;
+  }
+
+  out.titleSet = new Set(out.exempt_titles);
+  out.titleRegex = out.exempt_title_regex ? new RegExp(out.exempt_title_regex, 'i') : null;
+  return out;
+}
+
 // ---------- reading ----------
 
 // Scan: all non-redirect mainspace pages with size + any Stub/Super Stub templates.
@@ -324,8 +511,8 @@ function planEdit(page, content) {
   const hasSuper = RE_SUPER.test(content);
   const hasStub = RE_STUB.test(content);
 
-  // 512 to 1023 bytes -> ONLY {{Super Stub}}
-  if (page.length < SUPER_STUB_MAX) {
+  // min_size .. super_stub_max-1 -> ONLY {{Super Stub}}
+  if (page.length < cfg.super_stub_max) {
     if (hasSuper && !hasStub) return null;
 
     let newText = content.replace(STRIP_STUB, '');
@@ -337,12 +524,12 @@ function planEdit(page, content) {
     return {
       newText,
       summary: hasStub
-        ? `Bot: Upgrading {{Stub}} to {{Super Stub}} (page size: ${page.length} bytes < 1024)`
-        : `Bot: Adding {{Super Stub}} (page size: ${page.length} bytes < 1024)`,
+        ? `Bot: Upgrading {{Stub}} to {{Super Stub}} (page size: ${page.length} bytes < ${cfg.super_stub_max})`
+        : `Bot: Adding {{Super Stub}} (page size: ${page.length} bytes < ${cfg.super_stub_max})`,
     };
   }
 
-  // 1024 to 2047 bytes -> ONLY {{Stub}}
+  // super_stub_max .. stub_max-1 -> ONLY {{Stub}}
   if (hasStub && !hasSuper) return null;
 
   let newText = content.replace(STRIP_SUPER, '');
@@ -354,8 +541,8 @@ function planEdit(page, content) {
   return {
     newText,
     summary: hasSuper
-      ? `Bot: Changing {{Super Stub}} to {{Stub}} (page size: ${page.length} bytes >= 1024)`
-      : `Bot: Adding {{Stub}} (page size: ${page.length} bytes < 2048)`,
+      ? `Bot: Changing {{Super Stub}} to {{Stub}} (page size: ${page.length} bytes >= ${cfg.super_stub_max})`
+      : `Bot: Adding {{Stub}} (page size: ${page.length} bytes < ${cfg.stub_max})`,
   };
 }
 
@@ -394,110 +581,43 @@ async function main() {
   await login();
   const csrfToken = DRY_RUN ? null : await getCsrfToken();
 
+  // Load settings from the wiki (trusted revisions only) and undo untrusted edits.
+  const { values, revert } = await loadWikiConfig();
+  if (revert) await revertConfigPage(revert, csrfToken);
+  cfg = resolveConfig(values);
+
+  // Soft stop: `enabled = false` on the config page.
+  if (!cfg.enabled) {
+    console.log('Bot is disabled (enabled = false). Exiting without edits.');
+    return;
+  }
+
   const pages = await getAllMainspacePages();
 
-  // Stage 1 (free, from the scan): only pages 512-2047 bytes whose templates
-  // don't match their size band. <512 and >=2048 are never touched.
+  // Stage 1 (free, from the scan): only pages in [min_size, stub_max) whose templates
+  // don't match their size band. Everything below or above that is never touched.
   let candidates = pages.filter((p) => {
-    if (p.length < MIN_SIZE || p.length >= STUB_MAX) return false;
+    if (p.length < cfg.min_size || p.length >= cfg.stub_max) return false;
 
     const hasSuper = p.templates.includes('Template:Super Stub');
     const hasStub = p.templates.includes('Template:Stub');
 
-    if (p.length < SUPER_STUB_MAX) return !hasSuper || hasStub;
+    if (p.length < cfg.super_stub_max) return !hasSuper || hasStub;
     return !hasStub || hasSuper;
   });
 
-  // Stage 2 (free): title-regex exemption.
+  // Stage 2 (free): title exemptions (exact titles + regex).
   let exemptCount = 0;
-  if (EXEMPT_TITLE_REGEX) {
+  {
     const before = candidates.length;
-    candidates = candidates.filter((p) => !EXEMPT_TITLE_REGEX.test(p.title));
+    candidates = candidates.filter(
+      (p) =>
+        !cfg.titleSet.has(normalizeTitle(p.title)) &&
+        !(cfg.titleRegex && cfg.titleRegex.test(p.title))
+    );
     exemptCount += before - candidates.length;
   }
 
   // Stage 3: category exemption, fetched ONLY for the remaining candidates.
-  if (EXEMPT_CATEGORIES.length && candidates.length) {
-    const cats = await getCategories(candidates.map((p) => p.pageid));
-    const before = candidates.length;
-    candidates = candidates.filter(
-      (p) => !(cats.get(p.pageid) || []).some((c) => EXEMPT_CATEGORIES.includes(normalizeCategory(c)))
-    );
-    exemptCount += before - candidates.length;
-  }
-
-  console.log(
-    `Scanned ${pages.length} articles. ${candidates.length} need updates ` +
-      `(${exemptCount} otherwise-eligible pages skipped as exempt).`
-  );
-  if (candidates.length === 0) {
-    console.log(`Done in ${elapsed()}.`);
-    return;
-  }
-
-  // Stage 4: batched content fetch.
-  const contents = await getContents(candidates.map((p) => p.pageid));
-
-  // Stage 5: plan edits (pure, instant).
-  const jobs = [];
-  for (const page of candidates) {
-    const entry = contents.get(page.pageid);
-    if (!entry) continue;
-    const plan = planEdit(page, entry.content);
-    if (plan) jobs.push({ page, revid: entry.revid, ...plan });
-  }
-
-  // Stage 6: apply the cap. Dry runs always show everything.
-  const capped = !DRY_RUN && MAX_EDITS > 0 && jobs.length > MAX_EDITS;
-  const toRun = capped ? jobs.slice(0, MAX_EDITS) : jobs;
-  if (capped) {
-    console.log(
-      `MAX_EDITS=${MAX_EDITS}: editing ${toRun.length} of ${jobs.length} pages this run; ` +
-        `${jobs.length - toRun.length} deferred to later runs.`
-    );
-  }
-
-  // Stage 7: apply edits, rate-limited. Rate-limit failures are collected for a retry pass.
-  let edited = 0;
-  let failed = 0;
-  const retryJobs = [];
-
-  const runJob = async (job, isRetry) => {
-    try {
-      await editPage(job.page, job.revid, job.newText, job.summary, csrfToken);
-      edited++;
-    } catch (err) {
-      if (err.code === 'editconflict') {
-        console.log(`Skipped "${job.page.title}" (edited by someone else mid-run).`);
-      } else if (!isRetry && isRateLimitError(err.code, err.info)) {
-        console.log(`Rate limited on "${job.page.title}"; will retry at the end.`);
-        retryJobs.push(job);
-      } else {
-        failed++;
-        console.error(`Failed "${job.page.title}": ${err.message}`);
-      }
-    }
-  };
-
-  await mapPool(toRun, EDIT_CONCURRENCY, (job) => runJob(job, false));
-
-  // Stage 8: one cleanup pass for anything that was rate limited, after a cooldown.
-  if (retryJobs.length > 0) {
-    console.log(`Cooling down 15s, then retrying ${retryJobs.length} rate-limited edit(s)...`);
-    await sleep(15000);
-    editInterval = Math.max(editInterval, EDIT_INTERVAL_MS * 2);
-    await mapPool(retryJobs, 1, (job) => runJob(job, true));
-  }
-
-  console.log(
-    `Done in ${elapsed()}. ` +
-      `${DRY_RUN ? `${jobs.length} would be edited` : `${edited} edited`}, ${failed} failed, ` +
-      `${rateLimitHits} rate-limit hit(s).`
-  );
-  if (failed > 0) process.exitCode = 1;
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+  if (cfg.exempt_categories.length && candidates.length) {
+    const cats = await getCategorie
