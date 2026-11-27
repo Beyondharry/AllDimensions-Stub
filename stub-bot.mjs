@@ -652,6 +652,9 @@ async function main() {
     exemptCount += before - candidates.length;
   }
 
+  const target = pages.find((p) => p.title === 'The Poly Cosmologies');
+  console.log('DEBUG target:', target, 'in candidates:', candidates.some((p) => p.title === 'The Poly Cosmologies'));
+
   console.log(
     `Scanned ${pages.length} articles. ${candidates.length} need updates ` +
       `(${exemptCount} otherwise-eligible pages skipped as exempt).`
