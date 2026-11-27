@@ -1,6 +1,3 @@
-// stub-bot.mjs — Dynamic Fandom Stub / Super Stub Manager
-// (fast, capped, rate-limit safe, configurable from the wiki)
-//
 // Setting priority:  Wiki (User:StubManager/Configurations)  >  Secrets (env)  >  Inline code (DEFAULTS)
 //
 // Required secrets (never read from the wiki):
@@ -25,6 +22,7 @@ const READ_CONCURRENCY = Math.max(1, intEnv('READ_CONCURRENCY', 3));
 const BATCH_SIZE = 50;   // pages per read request
 const MAX_RETRIES = 8;
 const STOP_CHECK_EVERY = 10; // re-read the wiki config every N edits to honour a soft stop
+const TEMPLATE_MARGIN = 64;  // max bytes a stub banner can add to a page (used by the cheap pre-filter)
 
 // ---------- wiki configuration ----------
 
@@ -166,7 +164,7 @@ async function api(params, isPost = false) {
       const res = await fetch(url, {
         method: isPost ? 'POST' : 'GET',
         headers: {
-          'User-Agent': 'FandomStubBot/1.7 (Periodic Maintenance Script)',
+          'User-Agent': 'FandomStubBot/1.8 (Periodic Maintenance Script)',
           ...(cookies.size ? { Cookie: cookieHeader() } : {}),
           ...(isPost ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
         },
@@ -506,13 +504,31 @@ const RE_STUB = /\{\{Stub\}\}/;
 const STRIP_SUPER = /\{\{Super Stub\}\}[ \t]*\r?\n?/g;
 const STRIP_STUB = /\{\{Stub\}\}[ \t]*\r?\n?/g;
 
+const byteLen = (str) => Buffer.byteLength(str, 'utf8');
+
+// The page with every stub banner removed. Its size does NOT change when the bot adds,
+// removes or swaps a banner, so the size band it falls in is stable between runs.
+const stripBanners = (content) =>
+  content.replace(STRIP_SUPER, '').replace(STRIP_STUB, '').replace(/^\s+/, '');
+
+// 'super' | 'stub' | 'none' (left to human judgement)
+function bandOf(size) {
+  if (size < cfg.min_size || size >= cfg.stub_max) return 'none';
+  return size < cfg.super_stub_max ? 'super' : 'stub';
+}
+
 // Pure function: returns { newText, summary } or null if nothing to do.
+// The band is chosen from the size WITHOUT the banner, so adding a banner can never
+// push a page across a threshold and make the next run flip it back.
 function planEdit(page, content) {
   const hasSuper = RE_SUPER.test(content);
   const hasStub = RE_STUB.test(content);
+  const baseSize = byteLen(stripBanners(content));
+  const band = bandOf(baseSize);
 
-  // min_size .. super_stub_max-1 -> ONLY {{Super Stub}}
-  if (page.length < cfg.super_stub_max) {
+  if (band === 'none') return null;
+
+  if (band === 'super') {
     if (hasSuper && !hasStub) return null;
 
     let newText = content.replace(STRIP_STUB, '');
@@ -524,12 +540,12 @@ function planEdit(page, content) {
     return {
       newText,
       summary: hasStub
-        ? `Bot: Upgrading {{Stub}} to {{Super Stub}} (page size: ${page.length} bytes < ${cfg.super_stub_max})`
-        : `Bot: Adding {{Super Stub}} (page size: ${page.length} bytes < ${cfg.super_stub_max})`,
+        ? `Bot: Upgrading {{Stub}} to {{Super Stub}} (content size without banner: ${baseSize} bytes < ${cfg.super_stub_max})`
+        : `Bot: Adding {{Super Stub}} (content size without banner: ${baseSize} bytes < ${cfg.super_stub_max})`,
     };
   }
 
-  // super_stub_max .. stub_max-1 -> ONLY {{Stub}}
+  // band === 'stub'
   if (hasStub && !hasSuper) return null;
 
   let newText = content.replace(STRIP_SUPER, '');
@@ -541,8 +557,8 @@ function planEdit(page, content) {
   return {
     newText,
     summary: hasSuper
-      ? `Bot: Changing {{Super Stub}} to {{Stub}} (page size: ${page.length} bytes >= ${cfg.super_stub_max})`
-      : `Bot: Adding {{Stub}} (page size: ${page.length} bytes < ${cfg.stub_max})`,
+      ? `Bot: Changing {{Super Stub}} to {{Stub}} (content size without banner: ${baseSize} bytes >= ${cfg.super_stub_max})`
+      : `Bot: Adding {{Stub}} (content size without banner: ${baseSize} bytes < ${cfg.stub_max})`,
   };
 }
 
@@ -594,16 +610,21 @@ async function main() {
 
   const pages = await getAllMainspacePages();
 
-  // Stage 1 (free, from the scan): only pages in [min_size, stub_max) whose templates
-  // don't match their size band. Everything below or above that is never touched.
+  // Stage 1 (free, from the scan): cheap pre-filter. The scanned size includes any banner, so the
+  // real (banner-free) size lies between length - TEMPLATE_MARGIN and length. If that whole range
+  // sits in one band and the templates already match it, the page is settled. If the range
+  // straddles a threshold we can't tell yet, so the page stays a candidate and planEdit
+  // decides from the exact banner-free size.
   let candidates = pages.filter((p) => {
-    if (p.length < cfg.min_size || p.length >= cfg.stub_max) return false;
-
     const hasSuper = p.templates.includes('Template:Super Stub');
     const hasStub = p.templates.includes('Template:Stub');
+    const overhead = hasSuper || hasStub ? TEMPLATE_MARGIN : 0;
 
-    if (p.length < cfg.super_stub_max) return !hasSuper || hasStub;
-    return !hasStub || hasSuper;
+    const hiBand = bandOf(p.length);
+    const loBand = bandOf(Math.max(0, p.length - overhead));
+    if (hiBand !== loBand) return true;
+    if (hiBand === 'none') return false;
+    return hiBand === 'super' ? !hasSuper || hasStub : !hasStub || hasSuper;
   });
 
   // Stage 2 (free): title exemptions (exact titles + regex).
