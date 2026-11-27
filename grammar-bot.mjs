@@ -63,7 +63,7 @@ import {
 
 const MAIN_CONFIG_PAGE = 'User:StubManager/Configurations';
 const GRAMMAR_CONFIG_PAGE = 'User:StubManager/Configurations/Grammar';
-const OWNER = 'PUREDARK999';
+const OWNER = 'PureNocturne';
 const OUT_DIR = process.env.OUT_DIR || 'out';
 const STOP_CHECK_EVERY = 20;     // content batches between soft-stop re-checks
 const EDIT_STOP_CHECK_EVERY = 5; // edits between soft-stop re-checks
