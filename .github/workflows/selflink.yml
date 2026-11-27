@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 22
       - name: Run Redirect & Self-Link Bot
-        run: node redirect-selflink-module.mjs
+        run: node redirect-selflink.mjs
         env:
           WIKI_API: ${{ secrets.WIKI_API }}
           BOT_USER: ${{ secrets.BOT_USER }}
