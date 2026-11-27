@@ -27,7 +27,7 @@ const TEMPLATE_MARGIN = 64;  // max bytes a stub banner can add to a page (used 
 // ---------- wiki configuration ----------
 
 const CONFIG_PAGE = 'User:StubManager/Configurations';
-const OWNER = 'PUREDARK999';                  // always trusted
+const OWNER = 'PureNocturne';                  // always trusted
 const TRUSTED_GROUPS = ['sysop', 'bureaucrat']; // trusted by group
 const BOT_NAME = (BOT_USER || '').split('@')[0]; // the bot's own account is trusted too
 
