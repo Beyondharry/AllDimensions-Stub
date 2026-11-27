@@ -1,0 +1,141 @@
+<div style="border:1px solid #303030; border-radius:4px; padding:16px 20px;">
+
+== Grammar bot configuration ==
+
+These settings control the '''Grammar bot''' run by [[User:StubManager|StubManager]]. Only edits by sysops, bureaucrats and the wiki owner are used; any other edit is ignored and reverted automatically. Results are published at [[User:StubManager/Reports/Grammar]].
+
+'''Priority of settings:''' Wiki (this page) > Secrets (GitHub) > Defaults (in the code). A value that is left empty is treated as "not set".
+
+=== Settings ===
+Change the value after the <code>=</code> and save. Lines starting with <code>#</code> are comments.
+
+<pre class="grammar-settings">
+# Master switch for the Grammar bot. false = nothing runs (reports are not updated, nothing is edited).
+enabled = true
+
+# report = only write the report pages. preview = also show exactly which edits WOULD be made. apply = really make the approved edits.
+mode = report
+
+# Which rules run. 'all' or a comma-separated list of rule IDs (see the rule pages).
+rules_enabled = all
+
+# Rules an admin has approved for automatic fixing. Empty = nothing is ever edited. A rule also needs enough review evidence (see below).
+autofix_rules = 
+
+# How many findings of a rule must have been spot-checked by a human before it may be automatic.
+autofix_min_reviewed = 50
+
+# Minimum percentage of those spot-checked findings that were correct (for example 98).
+autofix_min_precision = 98
+
+# Safety cap: the most pages the bot will edit in one run. 0 = no edits at all.
+max_edits_per_run = 20
+
+# If a page needs more automatic fixes than this, the bot leaves it for a human (very messy pages are risky).
+max_fixes_per_page = 15
+
+# The bot will not edit a page that someone changed within this many hours (avoids fighting an editor who is mid-way through a rewrite).
+min_page_age_hours = 24
+
+# Pause between edits in milliseconds (keeps the bot polite and rate-limit safe).
+edit_interval_ms = 2500
+
+# true = text inside "quotation marks" is never changed or flagged (dialogue is often written in an unusual style).
+skip_quotes = true
+
+# Pages in these categories are not checked at all.
+exempt_categories = Typo exempt,Googology,Salad numbers,Stub exempt
+
+# Page titles that are not checked (comma-separated).
+exempt_titles = main page
+
+# Optional regular expression; matching page titles are not checked. Empty = none.
+exempt_title_regex = 
+
+# Only check this many pages (for testing). 0 = every page.
+max_pages = 0
+
+# Where the report pages are saved. Sub-pages are created below this title.
+reports_base = User:StubManager/Reports/Grammar
+
+# Most findings listed on each rule page (the counts are always complete).
+report_rows_per_rule = 400
+
+# Most findings listed per article on each rule page, so one messy page cannot fill the list.
+report_max_per_page_per_rule = 5
+
+# How many pages the "Worst pages" report lists.
+report_worst_pages = 300
+
+# Size of the random spot-check sample on each rule page.
+report_sample_size = 25
+
+# Rare-word rule: a word counts as rare if it appears at most this many times on the whole wiki.
+freq_rare_max = 2
+
+# Rare-word rule: the similar word must appear at least this many times.
+freq_common_min = 30
+
+# Rare-word rule: the similar word must be at least this many times more frequent than the rare word.
+freq_ratio_min = 10
+
+# Rare-word rule: ignore words shorter than this.
+freq_min_length = 5
+
+# Rare-word rule: most suggestions listed.
+freq_max_rows = 300
+</pre>
+
+=== Ignore list ===
+Words or phrases the bot must never flag (invented names, deliberate spellings). One per line or comma-separated. A phrase containing spaces ignores any finding whose surroundings contain it.
+
+<pre class="grammar-ignore">
+# example: Voidance, Omniverse
+</pre>
+
+=== Extra misspellings ===
+One per line as <code>wrong -> right</code>. These are added to the built-in list.
+
+<pre class="grammar-misspellings">
+# example: omniverce -> omniverse
+</pre>
+
+=== Reviews (evidence for automatic fixing) ===
+After spot-checking a rule's sample, record <code>rule_id@version = checked, wrong</code>. The version must match the rule's current version or the review is treated as outdated.
+
+<pre class="grammar-reviews">
+# example: known_misspelling@1 = 50, 1
+</pre>
+
+=== Word lists ===
+These lists '''extend''' the built-in lists. Start a line with <code>-</code> to remove a built-in entry (for example <code>-this</code>).
+
+'''Connecting words''' (wrongly capitalised after a comma):
+<pre class="grammar-glue">
+# example: whereupon
+</pre>
+
+'''Abbreviations''' (a full stop after these does not end a sentence; no dot at the end):
+<pre class="grammar-abbreviations">
+# example: gov
+</pre>
+
+'''Words that may be repeated''' (for example "had had"):
+<pre class="grammar-repeat-ok">
+# example: bis
+</pre>
+
+'''Names that start with a lowercase letter on purpose''':
+<pre class="grammar-lowercase-names">
+# example: iphone
+</pre>
+
+=== Rollout guide ===
+# '''Report phase:''' leave <code>mode = report</code> and <code>autofix_rules</code> empty. Read the reports, fix false positives with the lists above.
+# '''Review phase:''' spot-check each rule's sample and record the result in the reviews box.
+# '''Preview phase:''' add trusted rules to <code>autofix_rules</code>, set <code>mode = preview</code> and read the Planned fixes page.
+# '''Apply phase:''' set <code>mode = apply</code>. Keep <code>max_edits_per_run</code> small at first.
+# '''Emergency stop:''' <code>enabled = false</code>.
+
+</div>
+[[Category:Bot configurations]]
