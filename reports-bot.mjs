@@ -247,7 +247,7 @@ export function buildWantedReport(rows, lowerIndex, meta) {
     lines.push('|-');
     lines.push(`| ${i + 1} || ${L(r.title)} || ${r.total} || ${hint ? L(hint) : ''} || ${examples}`);
   });
-  lines.push('|}', '', '[[Category:Bot reports]]');
+  lines.push('|}', '');
   return lines.join('\n');
 }
 
@@ -416,7 +416,7 @@ export function buildMentionsReport(analysis, maxSources) {
   lines.push('', '== Orphans with no mention anywhere ==');
   lines.push('These need a human: nobody refers to them by name in plain text either.', '');
   for (const o of noMention) lines.push(`* ${L(o.title)} (${o.length.toLocaleString('en-US')} bytes)`);
-  lines.push('', '[[Category:Bot reports]]');
+  lines.push('');
   return lines.join('\n');
 }
 
