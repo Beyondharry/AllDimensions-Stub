@@ -2,7 +2,7 @@ name: Stub Bot
 
 on:
   schedule:
-    - cron: '0 */2 * * *'   # every 4 hours at :17 UTC (00:17, 04:17, 08:17, ...)
+    - cron: '0 */2 * * *'   # every 2 hours at :00 UTC (use '17 */4 * * *' for every 4 hours at :17)
   workflow_dispatch:
     inputs:
       dry_run:
