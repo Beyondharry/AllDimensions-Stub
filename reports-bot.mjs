@@ -31,7 +31,7 @@ import {
 } from './core.mjs';
 
 const CONFIG_PAGE = 'User:StubManager/Configurations';
-const OWNER = 'PUREDARK999';
+const OWNER = 'PureNocturne';
 const OUT_DIR = process.env.OUT_DIR || 'out'; // where DRY_RUN writes .wiki files
 const STOP_CHECK_EVERY = 20;   // re-read the trusted config every N content batches
 const SOURCE_KEEP_LIMIT = 200; // max distinct source pages remembered per orphan
