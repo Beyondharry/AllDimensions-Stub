@@ -44,27 +44,6 @@ export const RULES = [
     ],
   },
   {
-    id: 'repeated_word',
-    title: 'Repeated words',
-    version: 1,
-    confidence: 'low',
-    autofixable: true,
-    summary: 'The same word written twice in a row (for example "the the").',
-    explain: 'Accidentally typing a word twice is one of the most common slips when editing. The second copy is removed.',
-    examples: [
-      ['It is is extremely rare.', 'It is extremely rare.'],
-      ['This is the the end.', 'This is the end.'],
-    ],
-    notFlagged: [
-      "Words that are correct when doubled: ''had had'', ''that that'', ''is is'', ''very very'', ''no no'', ''ha ha'' and similar (the list can be edited on the config page).",
-      "Doubled capitalised names such as ''Bora Bora'', and words separated by punctuation or a line break.",
-    ],
-    logic: 'Looks for a word of 2+ letters followed by spaces/tabs and the same word again (ignoring case).',
-    risks: [
-      'Chants, stuttering speech and song lyrics can repeat words deliberately. Quoted dialogue is skipped by default.',
-    ],
-  },
-  {
     id: 'lowercase_after_period',
     title: 'Lowercase after full stop',
     version: 1,
@@ -189,6 +168,27 @@ export const RULES = [
     logic: "Uses the spelling of the next word, a list of 'yoo'-sound starts (uni-, use-, eu-, one...) and silent-h starts (hour, honest, honour, heir).",
     risks: [
       'Pronunciation is not always predictable from spelling, and invented words may be pronounced differently. This is the least certain rule, so it needs the most review before approval.',
+    ],
+  },
+  {
+    id: 'repeated_word',
+    title: 'Repeated words',
+    version: 1,
+    confidence: 'low',
+    autofixable: true,
+    summary: 'The same word written twice in a row (for example "the the").',
+    explain: 'Accidentally typing a word twice is one of the most common slips when editing. The second copy is removed.',
+    examples: [
+      ['It is is extremely rare.', 'It is extremely rare.'],
+      ['This is the the end.', 'This is the end.'],
+    ],
+    notFlagged: [
+      "Words that are correct when doubled: ''had had'', ''that that'', ''is is'', ''very very'', ''no no'', ''ha ha'' and similar (the list can be edited on the config page).",
+      "Doubled capitalised names such as ''Bora Bora'', and words separated by punctuation or a line break.",
+    ],
+    logic: 'Looks for a word of 2+ letters followed by spaces/tabs and the same word again (ignoring case).',
+    risks: [
+      'Chants, stuttering speech and song lyrics can repeat words deliberately. Quoted dialogue is skipped by default.',
     ],
   },
   {
